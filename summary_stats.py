@@ -156,12 +156,30 @@ def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_val
 # Main summary statistics function (updated to match Julia version)
 # =============================================================================
 
+def first_peak_location(pdf_vals, x_grid, prominence_frac=0.05):
+    """
+    Return the x-value (Sv) of the leftmost prominent peak in a KDE PDF.
+    Falls back to argmax if no prominent peaks are found.
+
+    Used to distinguish DO runs (stadial peak at ~10 Sv) from wild
+    oscillators (first peak at 14+ Sv, no low-AMOC state).
+    """
+    from scipy.signal import find_peaks
+    prominence = prominence_frac * pdf_vals.max()
+    peaks, _ = find_peaks(pdf_vals, prominence=prominence)
+    if len(peaks) == 0:
+        return x_grid[np.argmax(pdf_vals)]
+    return x_grid[peaks[0]]
+
+
 def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_fraction=0.02,
                           smooth_win=0, adaptive_threshold=True, threshold_method='clustering',
-                          threshold=None, grid_points=100, quantiles=[0.1, 0.5, 0.9],
+                          threshold=None, x_grid=None, grid_points=100, quantiles=[0.1, 0.5, 0.9],
                           ignore_first_stadial=True, verbose=False,
                           # DO event detection parameters (matching Julia defaults)
-                          loess_span=0.02, do_min_spacing=600, do_crossing_value=5.0):
+                          loess_span=0.02, do_min_spacing=600, do_crossing_value=5.0,
+                          # DO variability classification
+                          do_peak_threshold=14.0, pdf_prominence=0.05):
     """
     Compute summary statistics from AMOC time series.
     
@@ -183,8 +201,12 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
         Method for threshold detection ('percentile', 'bimodal_gap', 'clustering')
     threshold : float, optional
         Manual threshold value
+    x_grid : array, optional
+        Fixed evaluation grid for KDE PDF. When provided, all runs are
+        evaluated on the same support so that PCA/comparison is consistent.
+        If None, a per-run grid spanning [data.min(), data.max()] is used.
     grid_points : int
-        Number of points for PDF estimation
+        Number of points for PDF estimation (used only when x_grid is None)
     quantiles : list
         Quantiles to compute
     ignore_first_stadial : bool
@@ -232,7 +254,8 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
 
     # PDF using KDE
     kde = gaussian_kde(amoc_data)
-    x_grid = np.linspace(amoc_data.min(), amoc_data.max(), grid_points)
+    if x_grid is None:
+        x_grid = np.linspace(amoc_data.min(), amoc_data.max(), grid_points)
     pdf_vals = kde(x_grid)
     pdf_vals /= np.trapezoid(pdf_vals, x_grid)  # normalize
 
@@ -284,6 +307,12 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
     n_do_events = len(do_event_indices)
     avg_waiting_time = np.mean(do_waiting_times) if len(do_waiting_times) > 0 else 0.0
 
+    # Classify as DO-variability or wild oscillator based on first PDF peak location.
+    # Wild oscillators have no low-AMOC stadial state, so their first peak sits at
+    # high Sv values; true DO runs always have a stadial peak below do_peak_threshold.
+    fp_loc = first_peak_location(pdf_vals, x_grid, prominence_frac=pdf_prominence)
+    do_variability = fp_loc <= do_peak_threshold
+
     # Amplitude
     interstadial_max = []
     stadial_min = []
@@ -302,6 +331,15 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
     f, Pxx = welch(amoc_data, fs=1.0, nperseg=min(256, len(amoc_data)))
     psd_bins = np.log(Pxx[:10]) if len(Pxx) >= 10 else np.log(Pxx)
 
+    # Zero out all DO event data for wild oscillators so they don't pollute SBI
+    if not do_variability:
+        n_do_events          = 0
+        do_event_indices     = np.array([], dtype=int)
+        do_times             = np.array([])
+        do_waiting_times     = np.array([])
+        avg_waiting_time     = 0.0
+        avg_stadial_duration = 0.0
+
     # Combine all results
     stats = {
         'mean': basic_stats['mean'],
@@ -315,12 +353,12 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
         'stadial_ends': stadial_ends,
         'avg_stadial_duration': avg_stadial_duration,
         'stadial_durations': stadial_durations,
-        # *** NEW: DO event statistics (matching Julia) ***
         'n_do_events': n_do_events,
         'do_event_indices': do_event_indices,
         'do_times': do_times,
         'waiting_times': do_waiting_times,
         'avg_waiting_time': avg_waiting_time,
+        'do_variability': do_variability,
         # Keep amplitude and PSD
         'avg_amplitude': avg_amplitude,
         'psd_bins': psd_bins
@@ -500,15 +538,18 @@ def _plot_single_run(ax_row, time, amoc, stats, title='AMOC'):
     ax_ts.grid(alpha=0.3)
     
     # Add summary stats text
+    do_var = stats.get('do_variability', True)
+    box_color = 'wheat' if do_var else 'lightsalmon'
     ax_ts.text(
         0.98, 0.02,
+        f"DO variability: {'Yes' if do_var else 'No'}\n"
         f"N DO events: {stats['n_do_events']}\n"
         f"Avg. waiting time: {stats['avg_waiting_time']:.1f} yr\n"
         f"Avg. stadial duration: {stats['avg_stadial_duration']:.1f} yr\n"
         f"Amplitude: {stats['avg_amplitude']:.2f} Sv",
         transform=ax_ts.transAxes,
         fontsize=10, verticalalignment='bottom', horizontalalignment='right',
-        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        bbox=dict(boxstyle='round', facecolor=box_color, alpha=0.8)
     )
     
     # PDF plot
