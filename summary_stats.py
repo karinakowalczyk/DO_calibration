@@ -83,10 +83,11 @@ def find_crossing_before_peak(residual, time, peak_idx, crossing_value):
     return None
 
 
-def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_value=5.0):
+def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_value=5.0,
+                             detection_mode='peak_walkback'):
     """
     Detect DO events from smoothed residual.
-    
+
     Parameters:
     -----------
     amoc : array
@@ -99,7 +100,13 @@ def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_val
         Minimum spacing between DO events (in time units)
     crossing_value : float
         Threshold for residual to identify significant peaks
-    
+    detection_mode : str
+        'peak_walkback'   — find positive peaks above crossing_value, walk back to
+                           threshold crossing.  Works well with positive thresholds.
+        'upward_crossing' — find every upward crossing of crossing_value directly,
+                           then apply spacing filter.  Works for any sign of
+                           crossing_value, including negative (adaptive) values.
+
     Returns:
     --------
     do_event_indices : array
@@ -110,45 +117,52 @@ def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_val
         Waiting times between consecutive DO events
     """
     from scipy.ndimage import uniform_filter1d
-    
-    # Use fast uniform filter (moving average) instead of slow LOESS
-    # Window size based on span fraction of data
+
     window_size = max(3, int(len(amoc) * span))
     if window_size % 2 == 0:
-        window_size += 1  # Make odd for symmetric window
-    
+        window_size += 1
+
     smoothed = uniform_filter1d(amoc.astype(float), size=window_size, mode='nearest')
     residual = amoc - smoothed
-    
-    # Find peaks above crossing_value
-    all_peaks = find_peaks_positive(residual)
-    significant_peaks = np.array([p for p in all_peaks if residual[p] > crossing_value])
-    
-    # Filter by spacing
-    if len(significant_peaks) > 0:
-        filtered_peaks = filter_peaks_by_spacing(significant_peaks, residual, time, min_spacing)
+
+    if detection_mode == 'upward_crossing':
+        # Every point where residual rises from below crossing_value to above it.
+        # Spacing filter: keep the first crossing in each cluster.
+        all_crossings = [i for i in range(1, len(residual))
+                         if residual[i - 1] < crossing_value and residual[i] >= crossing_value]
+        do_event_indices = []
+        for idx in all_crossings:
+            if not do_event_indices or time[idx] - time[do_event_indices[-1]] >= min_spacing:
+                do_event_indices.append(idx)
+
+    elif detection_mode == 'peak_walkback':
+        all_peaks = find_peaks_positive(residual)
+        significant_peaks = np.array([p for p in all_peaks if residual[p] > crossing_value])
+
+        if len(significant_peaks) > 0:
+            filtered_peaks = filter_peaks_by_spacing(significant_peaks, residual, time, min_spacing)
+        else:
+            filtered_peaks = np.array([], dtype=int)
+
+        do_event_indices = []
+        for peak_idx in filtered_peaks:
+            crossing_idx = find_crossing_before_peak(residual, time, peak_idx, crossing_value)
+            if crossing_idx is not None:
+                crossing_time = time[crossing_idx]
+                is_far_enough = all(
+                    abs(crossing_time - time[prev_idx]) >= min_spacing
+                    for prev_idx in do_event_indices
+                )
+                if is_far_enough:
+                    do_event_indices.append(crossing_idx)
     else:
-        filtered_peaks = np.array([], dtype=int)
-    
-    # Find crossings before each peak
-    do_event_indices = []
-    for peak_idx in filtered_peaks:
-        crossing_idx = find_crossing_before_peak(residual, time, peak_idx, crossing_value)
-        if crossing_idx is not None:
-            # Check spacing from previous crossings
-            crossing_time = time[crossing_idx]
-            is_far_enough = True
-            for prev_idx in do_event_indices:
-                if abs(crossing_time - time[prev_idx]) < min_spacing:
-                    is_far_enough = False
-                    break
-            if is_far_enough:
-                do_event_indices.append(crossing_idx)
-    
+        raise ValueError(f"Unknown detection_mode: {detection_mode!r}. "
+                         "Use 'peak_walkback' or 'upward_crossing'.")
+
     do_event_indices = np.array(do_event_indices, dtype=int)
     do_times = time[do_event_indices] if len(do_event_indices) > 0 else np.array([])
     do_waiting_times = np.diff(do_times) if len(do_times) > 1 else np.array([])
-    
+
     return do_event_indices, do_times, do_waiting_times
 
 
@@ -178,6 +192,7 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
                           ignore_first_stadial=True, verbose=False,
                           # DO event detection parameters (matching Julia defaults)
                           loess_span=0.02, do_min_spacing=600, do_crossing_value=5.0,
+                          detection_mode='peak_walkback',
                           # DO variability classification
                           do_peak_threshold=14.0, pdf_prominence=0.05):
     """
@@ -302,7 +317,8 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
         amoc_data, time_data,
         span=loess_span,
         min_spacing=do_min_spacing,
-        crossing_value=do_crossing_value
+        crossing_value=do_crossing_value,
+        detection_mode=detection_mode,
     )
     n_do_events = len(do_event_indices)
     avg_waiting_time = np.mean(do_waiting_times) if len(do_waiting_times) > 0 else 0.0
