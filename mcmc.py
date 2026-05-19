@@ -2,7 +2,11 @@
 Bayesian parameter estimation using a GP emulator as forward model.
 
 Uncertainty model (diagonal, independent observables):
-    Var_total_i = sigma_emulator_i^2 + sigma_obs_i^2
+    Var_total_i = sigma_emulator_i^2 + sigma_obs_i^2 + sigma_discrepancy_i^2
+
+sigma_discrepancy is zero (default) when calibrating to the model's own output.
+Set it to a non-zero value when calibrating against real proxy observations to
+account for structural model error that no parameter choice can eliminate.
 
 Sampling: all parameters in log-space  phi_i = log(theta_i).
 Prior   : marginal KDE on training ensemble (physical space) x hard box
@@ -37,13 +41,18 @@ class EmulatorMCMC:
     """
 
     def __init__(self, emulator, stat_cols, prior_bounds,
-                 obs_targets, obs_sigmas, prior_samples, nwalkers=64):
-        self.emulator      = emulator
-        self.stat_cols     = list(stat_cols)
-        self.prior_bounds  = dict(prior_bounds)
-        self.obs_targets   = dict(obs_targets)
-        self.obs_sigmas    = dict(obs_sigmas)
-        self.nwalkers      = nwalkers
+                 obs_targets, obs_sigmas, prior_samples, nwalkers=64,
+                 discrepancy_sigmas=None):
+        self.emulator            = emulator
+        self.stat_cols           = list(stat_cols)
+        self.prior_bounds        = dict(prior_bounds)
+        self.obs_targets         = dict(obs_targets)
+        self.obs_sigmas          = dict(obs_sigmas)
+        # Structural model error: systematic gap between model and reality that
+        # no parameter choice can close. Zero (default) when calibrating to the
+        # model's own output; non-zero when calibrating against real proxy data.
+        self.discrepancy_sigmas  = dict(discrepancy_sigmas) if discrepancy_sigmas else {}
+        self.nwalkers            = nwalkers
 
         self.param_names = list(prior_bounds.keys())
         self.ndim        = len(self.param_names)
@@ -102,13 +111,17 @@ class EmulatorMCMC:
         ll = 0.0
         for key in self._pca_keys:
             i   = int(key.split('_')[1])
-            var = pca_s[i]**2 + self.obs_sigmas[key]**2
+            var = (pca_s[i]**2
+                   + self.obs_sigmas[key]**2
+                   + self.discrepancy_sigmas.get(key, 0.0)**2)
             ll -= 0.5 * ((self.obs_targets[key] - pca_p[i])**2 / var
                          + np.log(2.0 * np.pi * var))
 
         for key in self._stat_keys:
             j   = self._stat_idx[key]
-            var = Y_s[j]**2 + self.obs_sigmas[key]**2
+            var = (Y_s[j]**2
+                   + self.obs_sigmas[key]**2
+                   + self.discrepancy_sigmas.get(key, 0.0)**2)
             ll -= 0.5 * ((self.obs_targets[key] - Y_p[j])**2 / var
                          + np.log(2.0 * np.pi * var))
         return ll

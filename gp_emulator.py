@@ -21,10 +21,14 @@ class GPEmulatorPDF:
         pdf_xpoints : 1-D array, the fixed AMOC x-grid used when evaluating KDEs
     """
 
-    def __init__(self, kernel=None, scaler_X=None, scaler_y=None):
+    def __init__(self, kernel=None, scaler_X=None, scaler_y=None, min_std=None):
         self.kernel = kernel if kernel is not None else RBF(1.0) + WhiteKernel(1e-6)
         self.scaler_X = scaler_X if scaler_X is not None else StandardScaler()
         self.scaler_y = scaler_y if scaler_y is not None else StandardScaler()
+        # Per-output std floor in physical units, e.g. from CV RMSE.
+        # Prevents GP overconfidence where posterior std < actual prediction error.
+        # Shape must match n_outputs = n_pca + n_stats. None = no floor.
+        self.min_std = np.asarray(min_std) if min_std is not None else None
         self.pca = None
         self.gp_model = None
         self.is_fitted = False
@@ -81,6 +85,8 @@ class GPEmulatorPDF:
 
         if return_std and std_scaled is not None:
             std_full = std_scaled * self.scaler_y.scale_
+            if self.min_std is not None:
+                std_full = np.maximum(std_full, self.min_std)
             pca_std = std_full[:, :self.n_pca_components]
             Y_std = std_full[:, self.n_pca_components:]
             return pca_pred, Y_pred, pca_std, Y_std

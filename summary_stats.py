@@ -84,7 +84,7 @@ def find_crossing_before_peak(residual, time, peak_idx, crossing_value):
 
 
 def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_value=5.0,
-                             detection_mode='peak_walkback'):
+                             detection_mode='peak_walkback', pre_smooth_win=0):
     """
     Detect DO events from smoothed residual.
 
@@ -106,6 +106,10 @@ def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_val
         'upward_crossing' — find every upward crossing of crossing_value directly,
                            then apply spacing filter.  Works for any sign of
                            crossing_value, including negative (adaptive) values.
+    pre_smooth_win : int
+        Window size (years) for optional pre-smoothing applied before the LOESS
+        residual step. Removes high-frequency noise so the residual is cleaner.
+        0 = disabled.
 
     Returns:
     --------
@@ -118,11 +122,15 @@ def detect_do_events_simple(amoc, time, span=0.02, min_spacing=500, crossing_val
     """
     from scipy.ndimage import uniform_filter1d
 
+    amoc = amoc.astype(float)
+    if pre_smooth_win > 1:
+        amoc = uniform_filter1d(amoc, size=pre_smooth_win, mode='nearest')
+
     window_size = max(3, int(len(amoc) * span))
     if window_size % 2 == 0:
         window_size += 1
 
-    smoothed = uniform_filter1d(amoc.astype(float), size=window_size, mode='nearest')
+    smoothed = uniform_filter1d(amoc, size=window_size, mode='nearest')
     residual = amoc - smoothed
 
     if detection_mode == 'upward_crossing':
@@ -192,7 +200,7 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
                           ignore_first_stadial=True, verbose=False,
                           # DO event detection parameters (matching Julia defaults)
                           loess_span=0.02, do_min_spacing=600, do_crossing_value=5.0,
-                          detection_mode='peak_walkback',
+                          detection_mode='peak_walkback', pre_smooth_win=0,
                           # DO variability classification
                           do_peak_threshold=14.0, pdf_prominence=0.05):
     """
@@ -319,6 +327,7 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
         min_spacing=do_min_spacing,
         crossing_value=do_crossing_value,
         detection_mode=detection_mode,
+        pre_smooth_win=pre_smooth_win,
     )
     n_do_events = len(do_event_indices)
     avg_waiting_time = np.mean(do_waiting_times) if len(do_waiting_times) > 0 else 0.0
@@ -327,7 +336,7 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
     # Wild oscillators have no low-AMOC stadial state, so their first peak sits at
     # high Sv values; true DO runs always have a stadial peak below do_peak_threshold.
     fp_loc = first_peak_location(pdf_vals, x_grid, prominence_frac=pdf_prominence)
-    do_variability = fp_loc <= do_peak_threshold
+    do_variability = (fp_loc <= do_peak_threshold) and (n_do_events > 0)
 
     # Amplitude
     interstadial_max = []
