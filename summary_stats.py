@@ -275,8 +275,13 @@ def compute_summary_stats(amoc_data, time_data=None, remove_spinup=True, spinup_
     else:
         amoc_smooth = amoc_data.copy()
 
-    # PDF using KDE
-    kde = gaussian_kde(amoc_data)
+    # PDF using KDE — skip runs where AMOC is constant (e.g. collapsed circulation)
+    if np.std(amoc_data) == 0:
+        return None
+    try:
+        kde = gaussian_kde(amoc_data)
+    except np.linalg.LinAlgError:
+        return None
     if x_grid is None:
         x_grid = np.linspace(amoc_data.min(), amoc_data.max(), grid_points)
     pdf_vals = kde(x_grid)
