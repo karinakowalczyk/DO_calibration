@@ -312,10 +312,12 @@ class EmulatorMCMC:
 
     # ── 1-D marginal posteriors ────────────────────────────────────────────
 
-    def plot_posterior_1d(self, figsize=None, bins=40):
+    def plot_posterior_1d(self, figsize=None, bins=40, default_params=None):
         """
         1-D marginal posterior (histogram) + prior KDE (from training samples)
         for each parameter. Median and 68 % credible interval annotated.
+        default_params : array-like, optional
+            Physical parameter values to mark with a red dashed vertical line.
         """
         n_cols = 3
         n_rows = int(np.ceil(self.ndim / n_cols))
@@ -342,6 +344,11 @@ class EmulatorMCMC:
             q16, med, q84 = np.percentile(self.samples[:, i], [16, 50, 84])
             ax.axvline(med, color='steelblue', lw=2)
             ax.axvspan(q16, q84, alpha=0.2, color='steelblue')
+
+            # Default parameter value
+            if default_params is not None:
+                ax.axvline(default_params[i], color='red', lw=1.5, ls='--',
+                           label='Default', zorder=3)
 
             # Prior bounds
             ax.axvline(lo, color='dimgray', ls=':', lw=1)

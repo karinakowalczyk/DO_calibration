@@ -26,7 +26,7 @@ def lowpass_filter(data, cutoff_years, dt=1.0):
 def plot_amoc_analysis(ensemble_stats, model_files, default_stats=None, default_file=None,
                        run_ids=None, n_runs=None, spinup_fraction=0.02,
                        figsize_per_row=3, width_ratios=(3, 2),
-                       show_default=True, save_path=None):
+                       show_default=True, save_path=None, run_labels=None):
     """
     Plot AMOC time series and KDE PDFs for selected ensemble members.
 
@@ -48,10 +48,10 @@ def plot_amoc_analysis(ensemble_stats, model_files, default_stats=None, default_
     """
     if run_ids is not None:
         runs_to_plot = list(run_ids)
-    elif n_runs is not None:
-        runs_to_plot = list(range(n_runs))
     else:
-        runs_to_plot = list(range(min(10, len(ensemble_stats))))
+        valid_indices = [i for i, s in enumerate(ensemble_stats) if s is not None]
+        k = n_runs if n_runs is not None else 10
+        runs_to_plot = valid_indices[:k]
 
     runs_to_plot = [i for i in runs_to_plot
                     if i < len(ensemble_stats) and ensemble_stats[i] is not None]
@@ -84,8 +84,10 @@ def plot_amoc_analysis(ensemble_stats, model_files, default_stats=None, default_
         time = ds.time.values
         ds.close()
         s = int(len(amoc) * spinup_fraction)
+        label = run_labels.get(idx, '') if run_labels else ''
+        title = f'Run {idx + 1}' + (f' — {label}' if label else '')
         _plot_single_run(axes[row], time[s:] - time[s], amoc[s:], ensemble_stats[idx],
-                         title=f'AMOC — Run {idx + 1}')
+                         title=title)
         row += 1
 
     plt.tight_layout()
